@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,54 @@ func init() {
 type Point struct {
 	X, Y float64
 }
+
+func (p Point) Add(q Point) Point {
+	return Point{X: p.X + q.X, Y: p.Y + q.Y}
+}
+func (p Point) Equals(q Point) bool {
+	return p.X == q.X && p.Y == q.Y
+}
+
+type Ring []Point
+
+func (r Ring) At(i int) Point {
+	if len(r) == 0 {
+		return Point{}
+	}
+	return r[i%len(r)]
+}
+func (r Ring) Length() int {
+	return len(r)
+}
+func (r Ring) Area() (area float64) {
+	if len(r) <= 2 {
+		return 0
+	}
+
+	p0 := r.At(0)
+	for i := 1; i <= len(r); i++ {
+		p1 := r.At(i)
+		area += p0.X*p1.Y - p1.X*p0.Y
+		p0 = p1
+	}
+	return
+}
+
+type Bezier struct {
+	p0, p1, c0, c1 Point
+}
+
+func (b Bezier) at(t float64) Point {
+	a0 := Point{X: b.p0.X*(1-t) + b.c0.X*t, Y: b.p0.Y*(1-t) + b.c0.Y*t}
+	a1 := Point{X: b.c0.X*(1-t) + b.c1.X*t, Y: b.c0.Y*(1-t) + b.c1.Y*t}
+	a2 := Point{X: b.c1.X*(1-t) + b.p1.X*t, Y: b.c1.Y*(1-t) + b.p1.Y*t}
+
+	b0 := Point{X: a0.X*(1-t) + a1.X*t, Y: a0.Y*(1-t) + a1.Y*t}
+	b1 := Point{X: a1.X*(1-t) + a2.X*t, Y: a1.Y*(1-t) + a2.Y*t}
+
+	return Point{X: b0.X*(1-t) + b1.X*t, Y: b0.Y*(1-t) + b1.Y*t}
+}
+
 type Color struct {
 	R, G, B, A float64
 }
@@ -55,7 +104,8 @@ const (
 
 var (
 	SVGAllCommands = []rune{
-		rune(SVGDAbsoluteMoveCommand), rune(SVGDRelativeMoveCommand), rune(SVGDAbsoluteVerticalCommand), rune(SVGDRelativeVerticalCommand),
+		rune(SVGDAbsoluteMoveCommand), rune(SVGDRelativeMoveCommand), rune(SVGDAbsoluteLineCommand), rune(SVGDRelativeLineCommand),
+		rune(SVGDAbsoluteVerticalCommand), rune(SVGDRelativeVerticalCommand),
 		rune(SVGDAbsoluteHorizontalCommand), rune(SVGDRelativeHorizontalCommand), rune(SVGDAbsoluteCurveCommand), rune(SVGDRelativeCurveCommand),
 		rune(SVGDAbsoluteCloseCommand), rune(SVGDRelativeCloseCommand),
 	}
@@ -73,17 +123,161 @@ func (r SVGDReader) ChompCommand() (SVGDCommand, error) {
 }
 
 type SVGDPart interface {
-	Start() Point
-	Linearize(res float64) []Point
-	End() Point
-	Type() SVGDCommand
+	Linearize(start Point, res float64) []Point
+}
+
+type SVGDAbsoluteMovePart struct {
+	Point
+}
+
+// TODO: how to handle multple paths
+func (p SVGDAbsoluteMovePart) Linearize(start Point, res float64) []Point {
+	return []Point{p.Point}
+}
+
+type SVGDRelativeMovePart struct {
+	Point
+}
+
+// TODO: how to handle multple paths
+func (p SVGDRelativeMovePart) Linearize(start Point, res float64) []Point {
+	return []Point{start.Add(p.Point)}
+}
+
+type SVGDAbsoluteLinePart struct {
+	Point
+}
+
+func (p SVGDAbsoluteLinePart) Linearize(start Point, res float64) []Point {
+	return []Point{p.Point}
+}
+
+type SVGDRelativeLinePart struct {
+	Point
+}
+
+func (p SVGDRelativeLinePart) Linearize(start Point, res float64) []Point {
+	return []Point{start.Add(p.Point)}
+}
+
+type SVGDAbsoluteHorizontalPart struct {
+	distance float64
+}
+
+func (p SVGDAbsoluteHorizontalPart) Linearize(start Point, res float64) []Point {
+	return []Point{Point{X: p.distance, Y: start.Y}}
+}
+
+type SVGDRelativeHorizontalPart struct {
+	distance float64
+}
+
+func (p SVGDRelativeHorizontalPart) Linearize(start Point, res float64) []Point {
+	return []Point{start.Add(Point{X: p.distance, Y: 0})}
+}
+
+type SVGDAbsoluteVerticalPart struct {
+	distance float64
+}
+
+func (p SVGDAbsoluteVerticalPart) Linearize(start Point, res float64) []Point {
+	return []Point{Point{X: start.X, Y: p.distance}}
+}
+
+type SVGDRelativeVerticalPart struct {
+	distance float64
+}
+
+func (p SVGDRelativeVerticalPart) Linearize(start Point, res float64) []Point {
+	return []Point{start.Add(Point{X: 0, Y: p.distance})}
+}
+
+type SVGDAbsoluteCurvePart struct {
+	points [3]Point
+}
+
+func (p SVGDAbsoluteCurvePart) Linearize(start Point, res float64) (ret []Point) {
+	b := Bezier{p0: start, c0: p.points[0], c1: p.points[1], p1: p.points[2]}
+	for e := 0.; e < 1.0; e += res {
+		ret = append(ret, b.at(e))
+	}
+	ret = append(ret, b.at(1.))
+	return
+}
+
+type SVGDRelativeCurvePart struct {
+	points [3]Point
+}
+
+func (p SVGDRelativeCurvePart) Linearize(start Point, res float64) (ret []Point) {
+	b := Bezier{p0: start, c0: start.Add(p.points[0]), c1: start.Add(p.points[1]), p1: start.Add(p.points[2])}
+	for e := 0.; e < 1.0; e += res {
+		ret = append(ret, b.at(e))
+	}
+	ret = append(ret, b.at(1.))
+	return
+}
+
+type SVGDClosePart struct{}
+
+func (p SVGDClosePart) Linearize(start Point, res float64) (ret []Point) {
+	return
 }
 
 func MakePart(cmd SVGDCommand, coords ...float64) (SVGDPart, error) {
+	switch cmd {
+	case SVGDAbsoluteMoveCommand:
+		return SVGDAbsoluteMovePart{Point: Point{X: coords[0], Y: coords[1]}}, nil
+	case SVGDRelativeMoveCommand:
+		return SVGDRelativeMovePart{Point: Point{X: coords[0], Y: coords[1]}}, nil
+	case SVGDAbsoluteLineCommand:
+		return SVGDAbsoluteLinePart{Point: Point{X: coords[0], Y: coords[1]}}, nil
+	case SVGDRelativeLineCommand:
+		return SVGDRelativeLinePart{Point: Point{X: coords[0], Y: coords[1]}}, nil
+	case SVGDAbsoluteHorizontalCommand:
+		return SVGDAbsoluteHorizontalPart{distance: coords[0]}, nil
+	case SVGDRelativeHorizontalCommand:
+		return SVGDRelativeHorizontalPart{distance: coords[0]}, nil
+	case SVGDAbsoluteVerticalCommand:
+		return SVGDAbsoluteVerticalPart{distance: coords[0]}, nil
+	case SVGDRelativeVerticalCommand:
+		return SVGDRelativeVerticalPart{distance: coords[0]}, nil
+	case SVGDAbsoluteCurveCommand:
+		return SVGDAbsoluteCurvePart{points: [3]Point{
+			{X: coords[0], Y: coords[1]},
+			{X: coords[2], Y: coords[3]},
+			{X: coords[4], Y: coords[5]},
+		}}, nil
+	case SVGDRelativeCurveCommand:
+		return SVGDRelativeCurvePart{points: [3]Point{
+			{X: coords[0], Y: coords[1]},
+			{X: coords[2], Y: coords[3]},
+			{X: coords[4], Y: coords[5]},
+		}}, nil
+	case SVGDAbsoluteCloseCommand:
+		fallthrough
+	case SVGDRelativeCloseCommand:
+		return SVGDClosePart{}, nil
+	}
+
 	return nil, fmt.Errorf("invalid coordinates for part")
 }
 
-func (r SVGDReader) Parse() (parts []SVGDPart, err error) {
+type SVGDParts []SVGDPart
+
+func (a SVGDParts) Linearize(res float64) (ret []Point) {
+	for _, p := range a {
+		last := Point{}
+		if e := len(ret) - 1; e >= 0 {
+			last = ret[e]
+		}
+
+		ret = append(ret, p.Linearize(last, res)...)
+	}
+	return
+}
+
+func (r SVGDReader) Parse() (parts SVGDParts, err error) {
 	cmd := SVGDInvalidCommand
 	var part SVGDPart
 	x, y := 0., 0.
@@ -160,7 +354,7 @@ func (r SVGDReader) ChompSign() (float64, error) {
 	} else if ru == '+' {
 		return 1, nil
 	} else if ru == '-' {
-		return 0, nil
+		return -1, nil
 	} else if ru == '.' || (ru >= '0' && ru <= '9') {
 		// assume positive if there is a number after
 		if err := r.RuneScanner.UnreadRune(); err != nil {
@@ -244,6 +438,21 @@ func Reverse[K interface{}](s []K) {
 		s[i], s[j] = s[j], s[i]
 	}
 }
+func Map[K interface{}, V interface{}](s []K, t func(K) V) (r []V) {
+	for _, k := range s {
+		r = append(r, t(k))
+	}
+	return
+}
+func RemoveDuplicates[K interface{}](s []K, pred func(K, K) bool) (ret []K) {
+	for _, k := range s {
+		if dex := len(ret); dex > 0 && pred(k, ret[dex-1]) {
+			continue
+		}
+		ret = append(ret, k)
+	}
+	return
+}
 
 func parseHashColor(col string) (c Color, err error) {
 	matches := colorHashParser.FindStringSubmatch(col)
@@ -290,173 +499,41 @@ type Polygon struct {
 	Triangles []Triangle
 }
 
-func chompFloat(s string) (f float64, rem string) {
-	dex := floatParser.FindStringSubmatchIndex(s)
-
-	// dex[6] is the end
-	var err error
-	f, err = strconv.ParseFloat(s[dex[2]:dex[6]], 64)
-	// TODO: ignore the error once the regex is debugged
-	if err != nil {
-		panic(err)
-	}
-	return f, s[dex[6]:]
-}
-
-type Bezier struct {
-	p0, p1, c0, c1 Point
-}
-
-func (b Bezier) at(t float64) Point {
-	a0 := Point{X: b.p0.X*(1-t) + b.c0.X*t, Y: b.p0.Y*(1-t) + b.c0.Y*t}
-	a1 := Point{X: b.c0.X*(1-t) + b.c1.X*t, Y: b.c0.Y*(1-t) + b.c1.Y*t}
-	a2 := Point{X: b.c1.X*(1-t) + b.p1.X*t, Y: b.c1.Y*(1-t) + b.p1.Y*t}
-
-	b0 := Point{X: a0.X*(1-t) + a1.X*t, Y: a0.Y*(1-t) + a1.Y*t}
-	b1 := Point{X: a1.X*(1-t) + a2.X*t, Y: a1.Y*(1-t) + a2.Y*t}
-
-	return Point{X: b0.X*(1-t) + b1.X*t, Y: b0.Y*(1-t) + b1.Y*t}
-}
-
-func PolygonFromPathElement(el *svgparser.Element, bezierIncrement float64) (*Polygon, error) {
-	if bezierIncrement <= 0 {
+func PolygonFromPathElement(el *svgparser.Element, res float64) (*Polygon, error) {
+	if res <= 0 {
 		panic(fmt.Errorf("negative bezier increment"))
 	}
 	var poly Polygon
 
 	var tp []triangolatte.Point
-	first := true
-	finished := false
-
-	b := Bezier{}
 
 	d := el.Attributes["d"]
-	d = strings.TrimLeft(d, " \n\r")
-	var cmd byte
-	x, y := 0., 0.
-	dx, dy := 0., 0.
-	c := [6]float64{}
-	for len(d) > 0 {
-		cmd, d = d[0], d[1:]
-		switch cmd {
-		case 'M':
-			if !first {
-				return nil, fmt.Errorf("move was not the first command")
-			}
-			x, d = chompFloat(d)
-			d = strings.TrimLeft(d, " ,")
-			y, d = chompFloat(d)
-			d = strings.TrimLeft(d, " ")
-			tp = append(tp, triangolatte.Point{X: x, Y: y})
-			// fmt.Printf("x: %v, y: %v\n", x, y)
-		case 'm':
-			if !first {
-				return nil, fmt.Errorf("move was not the first command")
-			}
-			dx, d = chompFloat(d)
-			d = strings.TrimLeft(d, " ,\n\r")
-			dy, d = chompFloat(d)
-			d = strings.TrimLeft(d, " \n\r")
-			x += dx
-			y += dy
-			tp = append(tp, triangolatte.Point{X: x, Y: y})
 
-			// fmt.Printf("dx: %v, dy: %v\n", dx, dy)
-		case 'L':
-			x, d = chompFloat(d)
-			d = strings.TrimLeft(d, " ,\n\r")
-			y, d = chompFloat(d)
-			d = strings.TrimLeft(d, " ,\n\r")
+	fmt.Fprintf(os.Stderr, "d attribute: %s\n", d)
 
-			tp = append(tp, triangolatte.Point{X: x, Y: y})
-		case 'l':
-			dx, d = chompFloat(d)
-			d = strings.TrimLeft(d, " ,\n\r")
-			dy, d = chompFloat(d)
-			d = strings.TrimLeft(d, " ,\n\r")
-			x += dx
-			y += dy
+	dreader := SVGDReader{strings.NewReader(d)}
 
-			tp = append(tp, triangolatte.Point{X: x, Y: y})
-		case 'V':
-			y, d = chompFloat(d)
-			d = strings.TrimLeft(d, " \n\r")
-
-			tp = append(tp, triangolatte.Point{X: x, Y: y})
-		case 'v':
-			dy, d = chompFloat(d)
-			d = strings.TrimLeft(d, " \n\r")
-			y += dy
-
-			tp = append(tp, triangolatte.Point{X: x, Y: y})
-		case 'H':
-			x, d = chompFloat(d)
-			d = strings.TrimLeft(d, " \n\r")
-
-			tp = append(tp, triangolatte.Point{X: x, Y: y})
-		case 'h':
-			dx, d = chompFloat(d)
-			d = strings.TrimLeft(d, " \n\r")
-			x += dx
-
-			tp = append(tp, triangolatte.Point{X: x, Y: y})
-		case 'C':
-			for i, _ := range c {
-				c[i], d = chompFloat(d)
-				d = strings.TrimLeft(d, " ,\n\r")
-			}
-			b.p0.X, b.p0.Y = x, y
-			b.c0.X, b.c0.Y = c[0], c[1]
-			b.c1.X, b.c1.Y = c[2], c[3]
-			b.p1.X, b.p1.Y = c[4], c[5]
-
-			for eps := 0.; eps < 1.0; eps += bezierIncrement {
-				pp := b.at(eps)
-				tp = append(tp, triangolatte.Point{X: pp.X, Y: pp.Y})
-			}
-			tp = append(tp, triangolatte.Point{X: c[4], Y: c[5]})
-		case 'c':
-			for i, _ := range c {
-				c[i], d = chompFloat(d)
-				d = strings.TrimLeft(d, " ,\n\r")
-			}
-			b.p0.X, b.p0.Y = x, y
-			b.c0.X, b.c0.Y = x+c[0], y+c[1]
-			b.c1.X, b.c1.Y = x+c[2], y+c[3]
-			b.p1.X, b.p1.Y = x+c[4], y+c[5]
-
-			for eps := 0.; eps < 1.0; eps += bezierIncrement {
-				pp := b.at(eps)
-				tp = append(tp, triangolatte.Point{X: pp.X, Y: pp.Y})
-			}
-			tp = append(tp, triangolatte.Point{X: x + c[4], Y: y + c[5]})
-		case 'Z':
-			fallthrough
-		case 'z':
-			finished = true
-		}
-
-		if first {
-			first = false
-		}
+	parts, err := dreader.Parse()
+	if err != nil {
+		return nil, err
 	}
-
-	if !finished {
-		return &poly, fmt.Errorf("I only know how to handle z terminated paths right now")
-	}
-	d = strings.TrimLeft(d, " \n\r")
-	if d != "" {
-		return &poly, fmt.Errorf("Z wasn't the last command")
-	}
-
-	fmt.Fprintf(os.Stderr, "tri Exterior: %#v\n", tp)
 
 	// reverse it
 	// Reverse(tp)
 
-	for _, p := range tp {
-		poly.Exterior = append(poly.Exterior, Point{X: p.X, Y: p.Y})
+	poly.Exterior = parts.Linearize(res)
+	poly.Exterior = RemoveDuplicates(poly.Exterior, func(p, q Point) bool { return p.Equals(q) })
+	fmt.Fprintf(os.Stderr, "area: %f\n", Ring(poly.Exterior).Area())
+	if area := Ring(poly.Exterior).Area(); area < 0 {
+		Reverse(poly.Exterior)
 	}
+	tp = Map(poly.Exterior, func(p Point) triangolatte.Point {
+		return triangolatte.Point{X: p.X, Y: p.Y}
+	})
+
+	// for _, p := range poly.Exterior {
+	// 	tp = append(tp, triangolatte.Point{X: p.X, Y: p.Y})
+	// }
 
 	indices := make(map[triangolatte.Point]int)
 	for i := 0; i < len(tp); i++ {
@@ -536,6 +613,7 @@ func PolygonFromPolygonElement(el *svgparser.Element) (*Polygon, error) {
 	var ret Polygon
 
 	// fmt.Printf("coords: %v", coords)
+	fmt.Fprintf(os.Stderr, "coords: %v\n", coords)
 
 	for i := 0; i+1 < len(coords); i += 2 {
 		// fmt.Printf("coords: %s %s", coords[i], coords[i+1])
@@ -545,15 +623,25 @@ func PolygonFromPolygonElement(el *svgparser.Element) (*Polygon, error) {
 			return nil, err
 		} else {
 			// indicies are the same
-			poly = append(poly, triangolatte.Point{X: x, Y: y})
 			ret.Exterior = append(ret.Exterior, Point{X: x, Y: y})
 		}
 	}
+
+	if area := Ring(ret.Exterior).Area(); area < 0 {
+		Reverse(ret.Exterior)
+	}
+	fmt.Fprintf(os.Stderr, "area: %f\n", Ring(ret.Exterior).Area())
+
+	poly = Map(ret.Exterior, func(p Point) triangolatte.Point {
+		return triangolatte.Point{X: p.X, Y: p.Y}
+	})
 
 	indices := make(map[triangolatte.Point]int)
 	for i := 0; i < len(poly); i++ {
 		indices[poly[i]] = i
 	}
+
+	// Reverse(poly)
 
 	tris, err := triangolatte.Polygon(poly)
 	if err != nil {
@@ -598,7 +686,7 @@ func ExtractPolygons(el *svgparser.Element) (ret []Polygon, err error) {
 				ret = append(ret, *poly)
 			}
 		case "path":
-			if poly, err := PolygonFromPathElement(el, 0.05); err != nil {
+			if poly, err := PolygonFromPathElement(el, 0.1); err != nil {
 				return ret, err
 			} else {
 				ret = append(ret, *poly)
@@ -611,15 +699,22 @@ func ExtractPolygons(el *svgparser.Element) (ret []Polygon, err error) {
 }
 
 func main() {
-	path := "test.svg"
+	flag.Parse()
+	svgPath := ""
 
-	country, err := os.Open(path)
+	if flag.Arg(0) == "" {
+		svgPath = "test.svg"
+	} else {
+		svgPath = flag.Arg(0)
+	}
+
+	country, err := os.Open(svgPath)
 	if err != nil {
 		panic(fmt.Errorf("error opening file: %v", err))
 	}
 	elements, err := svgparser.Parse(country, false)
 	if err != nil {
-		panic(fmt.Errorf("error parsing svg '%s': %v", err, path))
+		panic(fmt.Errorf("error parsing svg '%s': %v", err, svgPath))
 	}
 
 	polys, err := ExtractPolygons(elements)
@@ -638,22 +733,22 @@ func main() {
 		}
 	}
 
-	fmt.Print("f ")
-	v := 1
-	for _, p := range polys {
-		for _ = range p.Exterior {
-			fmt.Printf("%d ", v)
-			v++
-		}
-	}
-	fmt.Print("\n")
-
-	// for i, p := range polys {
-	// 	f := firstVertex[i]
-	// 	for _, t := range p.Triangles {
-	// 		fmt.Printf("f %d %d %d\n", f+t[0], f+t[1], f+t[2])
+	// fmt.Print("f ")
+	// v := 1
+	// for _, p := range polys {
+	// 	for _ = range p.Exterior {
+	// 		fmt.Printf("%d ", v)
+	// 		v++
 	// 	}
 	// }
+	// fmt.Print("\n")
+
+	for i, p := range polys {
+		f := firstVertex[i]
+		for _, t := range p.Triangles {
+			fmt.Printf("f %d %d %d\n", f+t[0], f+t[1], f+t[2])
+		}
+	}
 
 	// fmt.Printf("tris: %v\n", polys)
 }
