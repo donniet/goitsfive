@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -27,7 +28,8 @@ func init() {
 }
 
 type Point struct {
-	X, Y float64
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
 
 func (p Point) Add(q Point) Point {
@@ -165,7 +167,7 @@ type SVGDAbsoluteHorizontalPart struct {
 }
 
 func (p SVGDAbsoluteHorizontalPart) Linearize(start Point, res float64) []Point {
-	return []Point{Point{X: p.distance, Y: start.Y}}
+	return []Point{{X: p.distance, Y: start.Y}}
 }
 
 type SVGDRelativeHorizontalPart struct {
@@ -181,7 +183,7 @@ type SVGDAbsoluteVerticalPart struct {
 }
 
 func (p SVGDAbsoluteVerticalPart) Linearize(start Point, res float64) []Point {
-	return []Point{Point{X: start.X, Y: p.distance}}
+	return []Point{{X: start.X, Y: p.distance}}
 }
 
 type SVGDRelativeVerticalPart struct {
@@ -458,7 +460,7 @@ func parseHashColor(col string) (c Color, err error) {
 	matches := colorHashParser.FindStringSubmatch(col)
 
 	if matches[0] == "" {
-		err = fmt.Errorf("Uknown color format for '%s'", col)
+		err = fmt.Errorf("uknown color format for '%s'", col)
 		return
 	}
 
@@ -494,9 +496,9 @@ func MustParseColor(col string) Color {
 type Triangle [3]int
 
 type Polygon struct {
-	Fill      Color // replace with some sort of color
-	Exterior  []Point
-	Triangles []Triangle
+	Fill      Color      `json:"fill"` // replace with some sort of color
+	Exterior  []Point    `json:"exterior"`
+	Triangles []Triangle `json:"triangle"`
 }
 
 func PolygonFromPathElement(el *svgparser.Element, res float64) (*Polygon, error) {
@@ -698,6 +700,37 @@ func ExtractPolygons(el *svgparser.Element) (ret []Polygon, err error) {
 	return
 }
 
+func WriteOBJ(writer io.Writer, polys []Polygon) {
+	firstVertex := make(map[int]int)
+	count := 1
+	for i, p := range polys {
+		firstVertex[i] = count
+		count += len(p.Exterior)
+
+		for _, v := range p.Exterior {
+			fmt.Fprintf(writer, "v %f %f 0\n", v.X, v.Y)
+		}
+	}
+
+	// fmt.Print("f ")
+	// v := 1
+	// for _, p := range polys {
+	// 	for _ = range p.Exterior {
+	// 		fmt.Printf("%d ", v)
+	// 		v++
+	// 	}
+	// }
+	// fmt.Print("\n")
+
+	for i, p := range polys {
+		f := firstVertex[i]
+		for _, t := range p.Triangles {
+			fmt.Fprintf(writer, "f %d %d %d\n", f+t[0], f+t[1], f+t[2])
+		}
+	}
+
+}
+
 func main() {
 	flag.Parse()
 	svgPath := ""
@@ -722,33 +755,11 @@ func main() {
 		panic(err)
 	}
 
-	firstVertex := make(map[int]int)
-	count := 1
-	for i, p := range polys {
-		firstVertex[i] = count
-		count += len(p.Exterior)
+	// WriteOBJ(os.Stdout, polys)
 
-		for _, v := range p.Exterior {
-			fmt.Printf("v %f %f 0\n", v.X, v.Y)
-		}
-	}
-
-	// fmt.Print("f ")
-	// v := 1
-	// for _, p := range polys {
-	// 	for _ = range p.Exterior {
-	// 		fmt.Printf("%d ", v)
-	// 		v++
-	// 	}
-	// }
-	// fmt.Print("\n")
-
-	for i, p := range polys {
-		f := firstVertex[i]
-		for _, t := range p.Triangles {
-			fmt.Printf("f %d %d %d\n", f+t[0], f+t[1], f+t[2])
-		}
-	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "\t")
+	encoder.Encode(polys)
 
 	// fmt.Printf("tris: %v\n", polys)
 }
