@@ -16,8 +16,10 @@ precision highp float;
 
 attribute vec2 aPosition;
 attribute vec4 aColor;
+attribute vec3 aDistance;
 
 varying vec4 vColor;
+varying vec3 vDistance;
 
 uniform mat4 uModel;
 uniform mat4 uProject;
@@ -25,6 +27,7 @@ uniform mat4 uProject;
 void main() {
     gl_Position = uProject * uModel * vec4(aPosition.x, aPosition.y, 0., 1.);
     vColor = aColor;
+    vDistance = aDistance;
 }
 `
 
@@ -32,9 +35,11 @@ fragmentShader = `
 precision highp float;
 
 varying vec4 vColor;
+varying vec3 vDistance;
 
 void main() {
-    gl_FragColor = vColor;
+    float d = sqrt(vDistance.x * vDistance.x + vDistance.y * vDistance.y + vDistance.z * vDistance.z);
+    gl_FragColor = vec4(vColor.rgb, d);
 }
 `
 
@@ -87,6 +92,7 @@ function load() {
     let prog = {
         program: program,
         locations: {
+            aDistance: gl.getAttribLocation(program, 'aDistance'),
             aPosition: gl.getAttribLocation(program, 'aPosition'),
             aColor: gl.getAttribLocation(program, 'aColor'),
             uModel: gl.getUniformLocation(program, 'uModel'),
@@ -97,10 +103,45 @@ function load() {
     components = [];
     drawing.forEach(d => {
         // console.log(d);
+        distance = [0].repeat(d.exterior.length);
+        distance[d.triangle[0][0]] = 1;
+        distance[d.triangle[0][1]] = 2;
+        distance[d.triangle[0][2]] = 3;
+
+        for(let i = 1; i < d.triangle.length; i++) {
+            let t = d.triangle[i];
+            // find the indexes that are non-zero
+            found = [0,0,0,0];
+            d.triangle[i].forEach(j => found[distance[j]]++);
+            // console.log(found);
+            d.triangle[i].forEach(j => {
+                if(distance[j] == 0) {
+                    for(let k = 0; k < 4; k++) {
+                        if(found[k] == 0) {
+                            distance[j] = k;
+                            found[k] = 1;
+                            break;
+                        }
+                    }
+                }
+            })
+        }
+
+        // console.log(distance);
+        // console.log(d.exterior);
+        // console.log(d.triangle);
 
         positionArray = new Float32Array(d.exterior.map(p => [p.x, p.y]).flat());
         colorArray = new Float32Array([d.fill.r, d.fill.g, d.fill.b, 1.].repeat(d.exterior.length));
         elementArray = new Uint32Array(d.triangle.flat());
+        distanceArray = new Float32Array(distance.map(p => {
+            switch(p) {
+            case 0: return [0,0,0];
+            case 1: return [0,0,1];
+            case 2: return [0,1,0];
+            case 3: return [1,0,0];
+            }
+        }).flat());
 
         // console.log(positionArray, colorArray, elementArray);
 
@@ -112,6 +153,11 @@ function load() {
         gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, colorArray, gl.STATIC_DRAW);
 
+        let distanceBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, distanceBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, distanceArray, gl.STATIC_DRAW);
+        console.log(d.exterior.length, distanceArray.length);
+
         let elementBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, elementBuffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, elementArray, gl.STATIC_DRAW);
@@ -120,22 +166,24 @@ function load() {
             positionBuffer: positionBuffer,
             colorBuffer: colorBuffer,
             elementBuffer: elementBuffer,
+            distanceBuffer: distanceBuffer,
             triangleCount: d.triangle.length,
+            vertexCount: d.exterior.length,
         });
     });
     components.reverse();
 
     model =   [ 1., 0, 0, 0,
-                0, 1., 0, 0,
+                0, -1., 0, 0,
                 0, 0, 1., 0,
                 0, 0, 0, 1.];
 
     proj = [ 1./320., 0, 0., 0.,
-             0, -1./408., 0., 0.,
+             0, 1./408., 0., 0.,
              0, 0, 1., 0.,
              -1, 1, 0, 1.];
 
-    gl.clearColor(0.2, 0., 0., 1.0);  // Clear to black, fully opaque
+    gl.clearColor(1, 1, 1, 1.0);  // Clear to black, fully opaque
     gl.clearDepth(1.0);                 // Clear everything
     // gl.enable(gl.DEPTH_TEST);           // Enable depth testing
     // gl.depthFunc(gl.LEQUAL);            // Near things obscure far things
@@ -160,6 +208,10 @@ function drawComponent(gl, projectionMatrix, modelMatrix, prog, component) {
     gl.vertexAttribPointer(prog.locations.aColor, 4, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(prog.locations.aColor);
 
+    gl.bindBuffer(gl.ARRAY_BUFFER, component.distanceBuffer);
+    gl.vertexAttribPointer(prog.locations.aDistance, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(prog.locations.aDistance);
+
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, component.elementBuffer);
     
 
@@ -169,6 +221,11 @@ function drawComponent(gl, projectionMatrix, modelMatrix, prog, component) {
     gl.uniformMatrix4fv(prog.locations.uModel, false, modelMatrix);
 
     gl.drawElements(gl.TRIANGLES, component.triangleCount*3, gl.UNSIGNED_INT, 0);
+
+    // gl.bindBuffer(gl.ARRAY_BUFFER, component.positionBuffer);
+
+    // gl.lineWidth(10);
+    // gl.drawArrays(gl.LINE_STRIP, 0, component.vertexCount);
 }
 
 </script>
