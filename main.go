@@ -80,7 +80,10 @@ func (b Bezier) at(t float64) Point {
 }
 
 type Color struct {
-	R, G, B, A float64
+	R float64 `json:"r"`
+	G float64 `json:"g"`
+	B float64 `json:"b"`
+	A float64 `json:"a"`
 }
 
 type SVGDReader struct {
@@ -758,7 +761,7 @@ func main() {
 	// WriteOBJ(os.Stdout, polys)
 
 	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "\t")
+	// encoder.SetIndent("", "\t")
 	encoder.Encode(polys)
 
 	// fmt.Printf("tris: %v\n", polys)
