@@ -134,6 +134,90 @@ function setupShader(gl, d) {
     };
 }
 
+function Component(gl, fillColor, lineColor, exterior, tris, lineWidth) {
+    this.gl = gl;
+    this.lineColor = lineColor;
+    this.fillColor = fillColor;
+    this.exterior = exterior;
+    this.tris = tris;
+    this.lineWidth = typeof lineWidth == 'number' ? lineidth : 2.;
+    this.load();
+}
+Component.prototype.load = function() {
+    let gl = this.gl;
+
+    positionArray = new Float32Array(this.exterior.map(p => [p.x, p.y]).flat());
+    colorArray = new Float32Array([this.fillColor.r, this.fillColor.g, this.fillColor.b, 1.].repeat(this.exterior.length));
+    elementArray = new Uint32Array(this.tris.flat());
+
+    lineCorners = [...this.exterior];
+    linePrevs = [...lineCorners];
+    lineNexts = [...lineCorners];
+    linePrevs.unshift(linePrevs.pop()); // rotate right
+    lineNexts.push(lineNexts.shift());  // rotate left
+
+    // loop them all
+    lineCorners = [...lineCorners, lineCorners[0]]; 
+    linePrevs = [...linePrevs, linePrevs[0]];
+    lineNexts = [...lineNexts, lineNexts[0]];
+
+    linePrevArray = new Float32Array(linePrevs.map(p => [p.x, p.y, p.x, p.y]).flat());
+    lineCornerArray = new Float32Array(lineCorners.map(p => [p.x, p.y, p.x, p.y]).flat());
+    lineNextArray = new Float32Array(lineNexts.map(p => [p.x, p.y, p.x, p.y]).flat());
+    lineWidthArray = new Float32Array([-uniformLineWidth, uniformLineWidth].repeat(lineCorners.length));
+    lineColorArray = new Float32Array([0, 0, 0, 1.].repeat(lineCorners.length * 2));
+
+    // console.log(positionArray, colorArray, elementArray);
+
+    let positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positionArray, gl.STATIC_DRAW);
+
+    let colorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, colorArray, gl.STATIC_DRAW);
+
+    let elementBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, elementBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, elementArray, gl.STATIC_DRAW);
+
+    let linePrevBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, linePrevBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, linePrevArray, gl.STATIC_DRAW);
+
+    let lineCornerBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineCornerBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, lineCornerArray, gl.STATIC_DRAW);
+
+    let lineNextBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineNextBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, lineNextArray, gl.STATIC_DRAW);
+
+    let lineWidthBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineWidthBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, lineWidthArray, gl.STATIC_DRAW);
+
+    let lineColorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineColorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, lineColorArray, gl.STATIC_DRAW);
+
+    this.positionBuffer = positionBuffer;
+    this.colorBuffer = colorBuffer;
+    this.elementBuffer = elementBuffer;
+    this.triangleCount = d.triangle.length;
+    this.vertexCount = this.exterior.length;
+
+    this.linePrevBuffer = linePrevBuffer;
+    this.lineCornerBuffer = lineCornerBuffer;
+    this.lineNextBuffer = lineNextBuffer;
+    this.lineWidthBuffer = lineWidthBuffer;
+    this.lineColorBuffer = lineColorBuffer;
+}
+
+function Drawing() {
+
+}
+
 
 function load() {
     canvas = document.getElementById('canvas');
@@ -264,47 +348,49 @@ function load() {
 }
 
 
-function drawComponent(gl, projectionMatrix, modelMatrix, prog, lineProg, component) {
+Component.prototype.draw = function(projectionMatrix, modelMatrix, prog, lineProg) {
+    let gl = this.gl;
+    
     gl.useProgram(prog.program);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, component.positionBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
     gl.vertexAttribPointer(prog.locations.aPosition, 2, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(prog.locations.aPosition);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, component.colorBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.vertexAttribPointer(prog.locations.aColor, 4, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(prog.locations.aColor);
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, component.elementBuffer);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.elementBuffer);
 
     gl.uniformMatrix4fv(prog.locations.uProject, false, projectionMatrix);
     gl.uniformMatrix4fv(prog.locations.uModel, false, modelMatrix);
 
-    gl.drawElements(gl.TRIANGLES, component.triangleCount*3, gl.UNSIGNED_INT, 0);
+    gl.drawElements(gl.TRIANGLES, this.triangleCount*3, gl.UNSIGNED_INT, 0);
 
-    // gl.bindBuffer(gl.ARRAY_BUFFER, component.positionBuffer);
+    // gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
 
     // gl.lineWidth(10);
-    // gl.drawArrays(gl.LINE_STRIP, 0, component.vertexCount);
+    // gl.drawArrays(gl.LINE_STRIP, 0, this.vertexCount);
     gl.useProgram(lineProg.program);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, component.linePrevBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.linePrevBuffer);
     gl.vertexAttribPointer(lineProg.locations.aPrev, 2, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(lineProg.locations.aPrev);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, component.lineNextBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineNextBuffer);
     gl.vertexAttribPointer(lineProg.locations.aNext, 2, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(lineProg.locations.aNext);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, component.lineWidthBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineWidthBuffer);
     gl.vertexAttribPointer(lineProg.locations.aWidth, 1, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(lineProg.locations.aWidth);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, component.lineColorBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineColorBuffer);
     gl.vertexAttribPointer(lineProg.locations.aColor, 4, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(lineProg.locations.aColor);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, component.lineCornerBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineCornerBuffer);
     gl.vertexAttribPointer(lineProg.locations.aCorner, 2, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(lineProg.locations.aCorner);
 
@@ -312,7 +398,7 @@ function drawComponent(gl, projectionMatrix, modelMatrix, prog, lineProg, compon
     gl.uniformMatrix4fv(lineProg.locations.uProject, false, projectionMatrix);
     gl.uniformMatrix4fv(lineProg.locations.uModel, false, modelMatrix);
 
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, (component.vertexCount + 1) * 2);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, (this.vertexCount + 1) * 2);
 
 }
 
